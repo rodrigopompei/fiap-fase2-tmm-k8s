@@ -1,6 +1,10 @@
-# ToggleMaster — Guia de Deploy (How-To)
+# ToggleMaster — Guia de Deploy
 
 Projeto de feature flags distribuído, composto por cinco microserviços rodando em EKS. Este documento descreve **em ordem** tudo o que precisa ser provisionado e por quê.
+
+Observação: Esse passo a passo foi construido com base no meu ambiente criado de VPC e subnets publicas e privadas na AWS, caso pretenda usar esse documento como referencia atentar-se para trocar as informações que refere-se ao seu ambiente
+
+Projeto da fase dois do curso de DevOps e Arquitetura cloud da FIAP
 
 ---
 
