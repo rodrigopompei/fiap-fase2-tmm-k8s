@@ -2,7 +2,7 @@ apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
-  name: eks-tc2-prod-01
+  name: eks-tc2-prod-001
   region: us-east-2
 
 vpc:
@@ -17,11 +17,11 @@ vpc:
         id: subnet-028fed72f5db4f768
 
 managedNodeGroups:
-  - name: nodegroup-eks-tc2-prod-01
-    instanceType: t3.micro
-    minSize: 1
-    maxSize: 2
-    desiredCapacity: 1
+  - name: nodegroup-eks-tc2-prod-001
+    instanceType: c7i-flex.large
+    minSize: 2
+    maxSize: 3
+    desiredCapacity: 2
     privateNetworking: true
     subnets:
       - us-east-2a

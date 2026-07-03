@@ -97,7 +97,7 @@ EXPOSE 8001
 # --retries=3       : após 3 falhas consecutivas o container é marcado "unhealthy".
 # wget está disponível no Alpine por padrão; -qO- suprime output e lê o corpo.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8001/health || exit 1
+    CMD wget -qO- http://localhost:8001/auth/health || exit 1
 
 # ENTRYPOINT (diferente de CMD): o binário é sempre executado e não pode ser
 # substituído por argumentos passados no "docker run". Garante que o container

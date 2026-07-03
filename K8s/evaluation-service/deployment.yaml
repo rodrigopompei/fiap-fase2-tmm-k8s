@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluation-service
+  namespace: evaluation-service
+  labels:
+    app: evaluation-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evaluation-service
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+    spec:
+      serviceAccountName: evaluation-service
+      containers:
+      - name: evaluation-service
+        image: 570814275471.dkr.ecr.us-east-2.amazonaws.com/fiap-fase2/evaluation-service:1.0.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8004
+        env:
+        - name: PORT
+          value: "8004"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: evaluation-service-secrets
+              key: REDIS_URL
+        - name: FLAG_SERVICE_URL
+          value: "http://flag-service.flag-service.svc.cluster.local"
+        - name: TARGETING_SERVICE_URL
+          value: "http://targeting-service.targeting-service.svc.cluster.local"
+        - name: AWS_SQS_URL
+          value: "https://sqs.us-east-2.amazonaws.com/570814275471/ToggleMasterQueue"
+        - name: AWS_REGION
+          value: "us-east-2"
+        - name: SERVICE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: evaluation-service-secrets
+              key: SERVICE_API_KEY
+        volumeMounts:
+        - name: secrets-store-inline
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /evaluation/health
+            port: 8004
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /evaluation/health
+            port: 8004
+          initialDelaySeconds: 20
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources: {}
+      volumes:
+      - name: secrets-store-inline
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: evaluation-service-secrets

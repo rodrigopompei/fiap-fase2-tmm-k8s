@@ -67,6 +67,7 @@ def require_auth(f):
 # --- Endpoints da API ---
 
 @app.route('/health')
+@app.route('/flags/health')
 def health():
     return jsonify({"status": "ok"})
 

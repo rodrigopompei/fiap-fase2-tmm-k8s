@@ -64,11 +64,11 @@ def require_auth(f):
 
 # --- Endpoints da API ---
 
-@app.route('/health')
+@app.route('/targeting/health')
 def health():
     return jsonify({"status": "ok"})
 
-@app.route('/rules', methods=['POST'])
+@app.route('/targeting/rules', methods=['POST'])
 @require_auth
 def create_rule():
     """ Cria uma nova regra de segmentação para uma flag """
@@ -106,7 +106,7 @@ def create_rule():
         if cur: cur.close()
         if conn: pool.putconn(conn)
 
-@app.route('/rules/<string:flag_name>', methods=['GET'])
+@app.route('/targeting/rules/<string:flag_name>', methods=['GET'])
 @require_auth
 def get_rule(flag_name):
     """ Busca uma regra de segmentação pelo nome da flag """
@@ -127,7 +127,7 @@ def get_rule(flag_name):
         if cur: cur.close()
         if conn: pool.putconn(conn)
 
-@app.route('/rules/<string:flag_name>', methods=['PUT'])
+@app.route('/targeting/rules/<string:flag_name>', methods=['PUT'])
 @require_auth
 def update_rule(flag_name):
     """ Atualiza a regra de segmentação de uma flag """
@@ -174,7 +174,7 @@ def update_rule(flag_name):
         if cur: cur.close()
         if conn: pool.putconn(conn)
 
-@app.route('/rules/<string:flag_name>', methods=['DELETE'])
+@app.route('/targeting/rules/<string:flag_name>', methods=['DELETE'])
 @require_auth
 def delete_rule(flag_name):
     """ Deleta a regra de segmentação de uma flag """

@@ -50,14 +50,14 @@ func main() {
 
 	// --- Rotas da API ---
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", app.healthHandler)
+	mux.HandleFunc("/auth/health", app.healthHandler)
 
 	// Endpoint público para validar uma chave
-	mux.HandleFunc("/validate", app.validateKeyHandler)
+	mux.HandleFunc("/auth/validate", app.validateKeyHandler)
 
 	// Endpoints de "admin" para criar/gerenciar chaves
 	// Eles são protegidos pelo middleware de autenticação
-	mux.Handle("/admin/keys", app.masterKeyAuthMiddleware(http.HandlerFunc(app.createKeyHandler)))
+	mux.Handle("/auth/admin/keys", app.masterKeyAuthMiddleware(http.HandlerFunc(app.createKeyHandler)))
 
 	log.Printf("Serviço de Autenticação (Go) rodando na porta %s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {

@@ -73,7 +73,7 @@ EXPOSE 8003
 # --retries=3      : após 3 falhas consecutivas o container é marcado como "unhealthy".
 # Usa urllib da stdlib Python (sem dependência de curl/wget na imagem).
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8003/health').read()" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8003/targeting/health').read()" || exit 1
 
 # Inicia a aplicação Flask via Gunicorn (servidor WSGI recomendado para produção).
 # --bind 0.0.0.0:8003 : aceita conexões de qualquer interface de rede na porta 8003.

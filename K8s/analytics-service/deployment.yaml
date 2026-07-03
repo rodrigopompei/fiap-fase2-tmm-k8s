@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: analytics-service
+  labels:
+    app: analytics-service
+spec:
+  selector:
+    matchLabels:
+      app: analytics-service
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      serviceAccountName: analytics-service
+      containers:
+      - name: analytics-service
+        image: 570814275471.dkr.ecr.us-east-2.amazonaws.com/fiap-fase2/analytics-service:1.0.1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8005
+        env:
+        - name: PORT
+          value: "8005"
+        - name: AWS_REGION
+          value: "us-east-2"
+        - name: AWS_SQS_URL
+          value: "https://sqs.us-east-2.amazonaws.com/570814275471/ToggleMasterQueue"
+        - name: AWS_DYNAMODB_TABLE
+          value: "ToggleMasterAnalytics"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8005
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8005
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "250m"
+            memory: "256Mi"

@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flag-service
+  namespace: flag-service
+  labels:
+    app: flag-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flag-service
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: flag-service
+    spec:
+      serviceAccountName: flag-service
+      containers:
+      - name: flag-service
+        image: 570814275471.dkr.ecr.us-east-2.amazonaws.com/fiap-fase2/flag-service:1.0.1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8002
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: flag-service-secrets
+              key: DATABASE_URL
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service.auth-service.svc.cluster.local/auth"
+        volumeMounts:
+        - name: secrets-store-inline
+          mountPath: /mnt/secrets-store
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 20
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources: {}
+      volumes:
+      - name: secrets-store-inline
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: flag-service-secrets

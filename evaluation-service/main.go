@@ -102,8 +102,8 @@ func main() {
 
 	// --- Rotas ---
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", app.healthHandler)
-	mux.HandleFunc("/evaluate", app.evaluationHandler)
+	mux.HandleFunc("/evaluation/health", app.healthHandler)
+	mux.HandleFunc("/evaluation/evaluate", app.evaluationHandler)
 
 	log.Printf("Serviço de Avaliação (Go) rodando na porta %s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
