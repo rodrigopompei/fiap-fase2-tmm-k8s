@@ -19,8 +19,8 @@ vpc:
 managedNodeGroups:
   - name: nodegroup-eks-tc2-prod-001
     instanceType: c7i-flex.large
-    minSize: 2
-    maxSize: 3
+    minSize: 1
+    maxSize: 4
     desiredCapacity: 2
     privateNetworking: true
     subnets:
