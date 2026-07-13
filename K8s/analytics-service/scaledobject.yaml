@@ -8,8 +8,8 @@ spec:
     name: analytics-service
   minReplicaCount: 0
   maxReplicaCount: 5
-  pollingInterval: 30
-  cooldownPeriod: 300
+  pollingInterval: 5
+  cooldownPeriod: 60
   triggers:
   - type: aws-sqs-queue
     authenticationRef:
