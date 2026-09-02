@@ -1,0 +1,92 @@
+# Copie para terraform.tfvars e ajuste ao seu ambiente.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars está no .gitignore: ele tende a acumular dado específico do
+# seu laboratório.
+
+# ---------------------------------------------------------------------------
+# Geral
+# ---------------------------------------------------------------------------
+# O AWS Academy Learner Lab só permite us-east-1.
+aws_region  = "us-east-1"
+project     = "toggle-master"
+environment = "lab"
+
+# ---------------------------------------------------------------------------
+# IAM
+# ---------------------------------------------------------------------------
+lab_role_name = "LabRole"
+
+# Descomente apenas se iam:GetRole estiver bloqueado na sua sessão. Obtenha a
+# ARN no console (IAM > Roles > LabRole) ou com:
+#   aws iam get-role --role-name LabRole --query Role.Arn --output text
+# lab_role_arn = "arn:aws:iam::123456789012:role/LabRole"
+
+# ---------------------------------------------------------------------------
+# Rede
+# ---------------------------------------------------------------------------
+vpc_cidr = "10.0.0.0/16"
+az_count = 3
+
+# Um NAT Gateway compartilhado em vez de um por AZ. Economiza cerca de
+# US$ 65/mês, ao custo de perder redundância entre AZs.
+enable_nat_gateway = true
+single_nat_gateway = true
+
+# ---------------------------------------------------------------------------
+# EKS
+# ---------------------------------------------------------------------------
+cluster_name = "eks-tc3-lab-001"
+
+# Em 2026-09-01, us-east-1 oferecia: 1.36 1.35 1.34 1.33 1.32 1.31
+# Reconfirme antes do apply:
+#   ./scripts/check-lab-capabilities.sh
+cluster_version = "1.33"
+
+# c7i-flex.large (usada na Fase 2) não é permitida no Learner Lab.
+node_instance_types = ["t3.medium"]
+node_capacity_type  = "ON_DEMAND"
+node_desired_size   = 2
+node_min_size       = 1
+node_max_size       = 4
+
+# Restrinja ao seu IP para não deixar o endpoint da API aberto à internet:
+#   curl -s ifconfig.me
+# cluster_public_access_cidrs = ["203.0.113.4/32"]
+cluster_public_access_cidrs = ["0.0.0.0/0"]
+
+# IRSA exige iam:CreateOpenIDConnectProvider, negado no Learner Lab.
+enable_irsa = false
+
+# ---------------------------------------------------------------------------
+# Banco de dados
+# ---------------------------------------------------------------------------
+db_instance_class    = "db.t3.micro"
+db_engine_version    = "16"
+db_allocated_storage = 20
+db_master_username   = "toggle_master"
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+# false remove o ElastiCache e a REDIS_URL. O evaluation-service passa a
+# depender do fallback para flag-service e targeting-service.
+enable_cache    = true
+cache_node_type = "cache.t3.micro"
+
+# ---------------------------------------------------------------------------
+# Mensageria
+# ---------------------------------------------------------------------------
+sqs_queue_name      = "ToggleMasterQueue"
+dynamodb_table_name = "ToggleMasterAnalytics"
+
+# ---------------------------------------------------------------------------
+# Add-ons
+# ---------------------------------------------------------------------------
+# Deixe false na fase 1 do primeiro apply (o cluster ainda não existe) e mude
+# para true na fase 2. Ver a seção "Primeiro apply" no README.
+enable_addons                       = true
+enable_aws_load_balancer_controller = true
+enable_keda                         = true
+enable_secrets_store_csi_driver     = true

@@ -1,0 +1,32 @@
+# Diretórios de trabalho e plugins
+.terraform/
+.terraform.lock.hcl.bak
+
+# State local. A stack principal usa backend S3, mas bootstrap/ guarda state
+# local — e ele contém o nome do bucket e da tabela de lock.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Contêm valores específicos do ambiente e, no caso de outputs, senha do RDS e
+# MASTER_KEY em texto claro.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Gerado por bootstrap/; nomes de bucket variam por conta.
+backend.hcl
+
+# Arquivos de plan são binários e podem conter valores sensíveis.
+*.tfplan
+*.tfplan.*
+
+# Overrides locais de desenvolvimento
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Crash logs
+crash.log
+crash.*.log
