@@ -8,6 +8,12 @@ Esta stack é escrita **para o AWS Academy Learner Lab**. As restrições do
 laboratório não são detalhe de configuração: elas mudam o desenho da solução,
 principalmente na parte de IAM. A seção seguinte explica o que muda e por quê.
 
+> **Provisionamento já validado end-to-end.** Em 2026-09-02 a stack foi
+> aplicada na conta `056007986659`: 66 recursos criados, cluster EKS `v1.33.13`
+> com 2 nodes `Ready`, os 4 add-ons Helm `deployed`, e em seguida 66 recursos
+> destruídos sem deixar nada faturando. O log completo de comandos, resultados e
+> os 10 bugs encontrados no caminho está em [EXECUCAO.md](EXECUCAO.md).
+
 ---
 
 ## Índice
@@ -401,6 +407,24 @@ mas se isso aparecer, quebre em duas fases:
 Você está no AWS CLI v1 (é o caso desta máquina: `1.45.46`). Essa flag é
 exclusiva da v2 e aparece em todos os comandos do [README da raiz](../README.md),
 escrito para v2 em PowerShell. Basta removê-la; nada mais muda.
+
+**`You must specify a region` mesmo com `AWS_REGION` exportado**
+O AWS CLI v1 lê `AWS_DEFAULT_REGION` e ignora `AWS_REGION` (essa só vale na v2 e
+nos SDKs). Exporte `AWS_DEFAULT_REGION=us-east-1`. O Terraform não é afetado.
+
+**`terraform apply` termina com exit 1 e log vazio**
+Acontece ao rodar o Terraform desacoplado do terminal (background): o
+confinamento do snap engola stdout/stderr. Rode em primeiro plano. O apply é
+resumível — para descobrir onde parou:
+
+```bash
+terraform state list | wc -l
+terraform plan -detailed-exitcode    # 0 = convergido, 2 = há mudanças
+```
+
+**`Required plugins are not installed` / checksum do lock file**
+Ocorre ao alternar entre `init -backend=false` e o backend S3. Rode
+`terraform init -reconfigure -backend-config=backend.hcl`.
 
 **`AccessDeniedException` em `iam:GetRole`**
 Informe `lab_role_arn` no `terraform.tfvars`; o data source deixa de ser

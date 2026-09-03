@@ -48,9 +48,11 @@ resource "aws_vpc_security_group_ingress_rule" "postgres" {
   ip_protocol                  = "tcp"
 }
 
+# A descricao NAO pode ter acentos: a EC2 aceita apenas
+# a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* e rejeita o resto com InvalidParameterValue.
 resource "aws_vpc_security_group_egress_rule" "all" {
   security_group_id = aws_security_group.this.id
-  description       = "Saída liberada"
+  description       = "Saida liberada"
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "-1"
 }

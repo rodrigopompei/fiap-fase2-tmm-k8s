@@ -35,11 +35,14 @@ echo
 
 # Executa psql num pod efêmero dentro do cluster.
 # stdout do comando é preservado; o ruído do kubectl vai para stderr.
+#
+# --attach é obrigatório junto com --rm: o kubectl atual rejeita
+# "--rm should only be used for attached containers".
 psql_in_cluster() {
   local database="$1"
   shift
   kubectl run "pg-init-$$-${RANDOM}" \
-    --rm --restart=Never --quiet --image="$PG_IMAGE" \
+    --rm --attach --restart=Never --quiet --image="$PG_IMAGE" \
     --env="PGPASSWORD=${DB_PASS}" \
     --command -- \
     psql --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USER" \

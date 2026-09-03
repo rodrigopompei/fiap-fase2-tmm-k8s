@@ -55,6 +55,16 @@ resource "helm_release" "secrets_store_csi_driver_provider_aws" {
   cleanup_on_fail = true
   timeout         = var.helm_timeout
 
+  # O chart do provider EMBUTE o secrets-store-csi-driver como subchart
+  # (dependencia com condition secrets-store-csi-driver.install, default true).
+  # Como o driver ja e instalado pelo release acima, deixar o subchart ligado
+  # faz os dois disputarem o ServiceAccount "secrets-store-csi-driver" e o
+  # apply falha com "invalid ownership metadata".
+  set {
+    name  = "secrets-store-csi-driver.install"
+    value = "false"
+  }
+
   depends_on = [helm_release.secrets_store_csi_driver]
 }
 
