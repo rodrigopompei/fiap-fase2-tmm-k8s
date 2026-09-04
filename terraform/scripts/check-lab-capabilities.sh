@@ -47,6 +47,36 @@ fi
 echo
 
 # --------------------------------------------------------------------------
+# Um "output" invalido no profile faz TODO comando sem --output falhar na
+# formatacao, apos a chamada ter tido sucesso. O sintoma engana: parece falta de
+# permissao em massa. Verificamos isso explicitamente para dar o diagnostico certo.
+echo "Configuracao do AWS CLI"
+cli_version=$(aws --version 2>&1 | head -1)
+echo "          ${cli_version}"
+configured_output=$(aws configure get output 2>/dev/null || true)
+
+if out_probe=$(aws sts get-caller-identity 2>&1); then
+  ok "formato de saida padrao utilizavel${configured_output:+ (output = ${configured_output})}"
+else
+  case "$out_probe" in
+    *"Unknown output type"*)
+      bad "o profile define 'output = ${configured_output}', invalido nesta versao do AWS CLI"
+      echo "          Corrija com: aws configure set output json"
+      ;;
+    *)
+      bad "sts:GetCallerIdentity sem --output falhou:"
+      echo "$out_probe" | head -2 | sed 's/^/          /'
+      ;;
+  esac
+fi
+
+case "$cli_version" in
+  aws-cli/1.*)
+    note "AWS CLI v1: use AWS_DEFAULT_REGION (a v1 ignora AWS_REGION) e nao use --no-cli-pager" ;;
+esac
+echo
+
+# --------------------------------------------------------------------------
 echo "IAM (esperado: LabRole legivel, criacao de roles negada)"
 if role_arn=$(aws iam get-role --role-name "$LAB_ROLE" --query 'Role.Arn' --output text 2>/dev/null); then
   ok "${LAB_ROLE} encontrada: ${role_arn}"
@@ -82,18 +112,49 @@ else
   esac
 fi
 
-if aws iam list-open-id-connect-providers >/dev/null 2>&1; then
+# Sonda de iam:CreateOpenIDConnectProvider, a permissao que IRSA exige.
+# Enviamos uma URL invalida de proposito: a IAM autoriza ANTES de validar a
+# entrada, entao um "AccessDenied" prova a falta de permissao sem criar nada, e
+# um erro de validacao provaria que a permissao existe.
+if oidc_create=$(aws iam create-open-id-connect-provider \
+     --url "http://invalid-not-https.example.com" \
+     --client-id-list sts.amazonaws.com \
+     --thumbprint-list 0000000000000000000000000000000000000000 2>&1); then
+  note "iam:CreateOpenIDConnectProvider PERMITIDO - IRSA viavel (enable_irsa = true)"
+  note "ATENCAO: um provider OIDC pode ter sido criado; verifique e remova"
+else
+  case "$oidc_create" in
+    *AccessDenied*|*not\ authorized*|*explicit\ deny*)
+      ok "iam:CreateOpenIDConnectProvider negado - mantenha enable_irsa = false" ;;
+    *)
+      note "iam:CreateOpenIDConnectProvider: permissao existe (falhou na validacao da entrada)"
+      note "IRSA pode ser viavel; avalie enable_irsa = true" ;;
+  esac
+fi
+
+if oidc_out=$(aws iam list-open-id-connect-providers --output json 2>&1); then
   ok "iam:ListOpenIDConnectProviders permitido (leitura)"
 else
-  note "iam:ListOpenIDConnectProviders negado - IRSA indisponivel, mantenha enable_irsa = false"
+  case "$oidc_out" in
+    *AccessDenied*|*not\ authorized*|*explicit\ deny*|*AuthorizationError*)
+      note "iam:ListOpenIDConnectProviders negado - IRSA indisponivel, mantenha enable_irsa = false" ;;
+    *)
+      note "iam:ListOpenIDConnectProviders falhou por outro motivo - inconclusivo:"
+      echo "$oidc_out" | head -2 | sed 's/^/          /' ;;
+  esac
 fi
 echo
 
 # --------------------------------------------------------------------------
 echo "Servicos usados pela stack"
+
+# O --output json e explicito de proposito. Se o profile tiver um "output"
+# invalido para esta versao do CLI (ex: "output = none", que existe na v2 mas
+# nao na v1), todo comando sem --output falha na FORMATACAO, depois de a chamada
+# ter tido sucesso. Sem isso, a sonda acusaria falta de permissao inexistente.
 probe() {
   local label="$1"; shift
-  if "$@" >/dev/null 2>&1; then
+  if "$@" --output json >/dev/null 2>&1; then
     ok "$label"
   else
     bad "$label"

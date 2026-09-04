@@ -1,0 +1,47 @@
+# Configuração do flake8 compartilhada pelos serviços Python
+# (flag-service, targeting-service e analytics-service).
+#
+# Usada pelo job "Linter / Static Analysis" dos workflows em .github/workflows/.
+# Rodar localmente:  flake8 flag-service/
+#
+# Filosofia: o gate bloqueia problemas reais (pyflakes F###, erros de sintaxe
+# E9##, complexidade ciclomática) e tolera divergências puramente cosméticas
+# de PEP 8 que o código atual acumula. Assim o pipeline reprova bug, não estilo.
+
+[flake8]
+max-line-length = 120
+
+# Limite de complexidade ciclomática por função. Acima disso o flake8 emite
+# C901 e o job falha — sinal de que a função precisa ser quebrada.
+max-complexity = 15
+
+extend-ignore =
+    # E203: espaço antes de ':' — conflita com a formatação do black.
+    E203,
+    # E261: menos de dois espaços antes de comentário inline.
+    E261,
+    # E302/E303/E305: número de linhas em branco entre defs/statements.
+    E302,
+    E303,
+    E305,
+    # E701: múltiplos statements na mesma linha (ex.: "if not x: return ...").
+    E701,
+    # W291/W293: espaço em branco no fim da linha / em linha vazia.
+    W291,
+    W293,
+    # W292: arquivo sem newline no final.
+    W292,
+    # W503/W504: quebra de linha antes/depois de operador binário.
+    W503,
+    W504
+
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    db,
+    terraform,
+    K8s,
+    AWS,
+    load-tests-k6

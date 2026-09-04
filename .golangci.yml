@@ -1,0 +1,55 @@
+# Configuração do golangci-lint compartilhada pelos serviços Go
+# (auth-service e evaluation-service).
+#
+# Usada pelo job "Linter / Static Analysis" dos workflows em .github/workflows/.
+# Rodar localmente:  cd auth-service && golangci-lint run ./...
+#
+# Formato de configuração do golangci-lint v1.x (a versão está pinada nos
+# workflows). Cada serviço é um módulo Go próprio, por isso o linter roda com
+# working-directory no diretório do serviço e enxerga este arquivo por herança.
+
+run:
+  timeout: 5m
+  # Analisa também os arquivos _test.go quando existirem.
+  tests: true
+
+linters:
+  # Parte-se de zero e habilita-se explicitamente o conjunto desejado, para que
+  # uma atualização do golangci-lint não mude o resultado do pipeline sozinha.
+  disable-all: true
+  enable:
+    # Erros retornados e ignorados silenciosamente.
+    - errcheck
+    # Analisador oficial do toolchain Go (printf, copylocks, loopclosure, ...).
+    - govet
+    # Atribuições cujo valor nunca é lido.
+    - ineffassign
+    # Bugs reais e uso de APIs depreciadas (checks SA####).
+    - staticcheck
+    # Código simplificável (checks S####).
+    - gosimple
+    # Identificadores, funções e tipos declarados e nunca usados.
+    - unused
+
+  # misspell fica de fora de propósito: o dicionário dele é só de inglês e
+  # acusa falso positivo em todo comentário em português do projeto
+  # ("Eles" -> "Eels", "Clientes" -> "Clients", ...).
+
+linters-settings:
+  errcheck:
+    # Chamadas cujo erro é conhecidamente descartável neste código.
+    # Cada exclusão é uma decisão consciente, não um "silenciar tudo".
+    exclude-functions:
+      # Escrita do JSON de resposta HTTP: se o cliente desconectar não há o que
+      # fazer além de deixar o handler terminar.
+      - (*encoding/json.Encoder).Encode
+      # hash.Hash.Write nunca retorna erro (contrato documentado da interface).
+      - (hash.Hash).Write
+      # Gravação best-effort no cache Redis: falha só custa um cache miss.
+      # baseCmd é o tipo embutido em StatusCmd que de fato declara o Err().
+      - (*github.com/go-redis/redis/v8.baseCmd).Err
+
+issues:
+  # Sem truncamento: o job precisa reportar todos os achados de uma vez.
+  max-issues-per-linter: 0
+  max-same-issues: 0

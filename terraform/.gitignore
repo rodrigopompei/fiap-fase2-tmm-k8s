@@ -30,3 +30,7 @@ override.tf.json
 # Crash logs
 crash.log
 crash.*.log
+
+# Artefatos de merge/patch (nao casam com *.tfvars)
+*.orig
+*.rej

@@ -1,0 +1,394 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI/CD — analytics-service (Python 3.12 / Flask)
+#
+# Quatro estágios encadeados:
+#   1. build-test      → instala dependências, compila os .py e roda os testes
+#   2. lint            → flake8 (bloqueante) + pylint (informativo)
+#   3. security-scan   → SCA (Trivy fs) + SAST (bandit) — barra CRITICAL
+#   4. docker          → build da imagem, scan do container e push no ECR
+#
+# Os três primeiros jobs rodam em paralelo; o docker só começa depois que
+# todos passam. O push para o ECR acontece apenas em push na branch main —
+# em Pull Request a imagem é construída e escaneada, mas nunca publicada.
+# ─────────────────────────────────────────────────────────────────────────────
+name: 📊 analytics-service CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'analytics-service/**'
+      - '.flake8'
+      - '.github/workflows/analytics-service.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'analytics-service/**'
+      - '.flake8'
+      - '.github/workflows/analytics-service.yml'
+  # Permite disparar manualmente pela aba Actions (útil para revalidar).
+  workflow_dispatch:
+
+# Cancela execuções anteriores da mesma branch/PR que ainda estejam rodando.
+concurrency:
+  group: analytics-service-${{ github.ref }}
+  cancel-in-progress: true
+
+# Menor privilégio: o token só precisa ler o repositório. As credenciais da
+# AWS vêm de secrets, não do GITHUB_TOKEN.
+permissions:
+  contents: read
+
+env:
+  SERVICE_NAME: analytics-service
+  # Versão semântica do serviço. A tag da imagem vira v<SERVICE_VERSION>-<sha7>.
+  # Bump manual a cada release (espelha K8s/analytics-service/deployment.yaml).
+  SERVICE_VERSION: '1.0.1'
+  PYTHON_VERSION: '3.12'
+  FLAKE8_VERSION: '7.1.1'
+  PYLINT_VERSION: '3.3.1'
+  BANDIT_VERSION: '1.7.10'
+  # O AWS Academy Learner Lab só libera us-east-1.
+  AWS_REGION: us-east-1
+  # Criado pelo módulo terraform/modules/ecr (prefixo "fiap-fase2").
+  ECR_REPOSITORY: fiap-fase2/analytics-service
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Build & Unit Test
+  # ───────────────────────────────────────────────────────────────────────────
+  build-test:
+    name: 🔨 Build & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: analytics-service/requirements.txt
+
+      # Instalar as dependências é o equivalente ao "compile" de uma linguagem
+      # compilada: valida que o requirements.txt resolve nas versões pinadas.
+      - name: 📦 Instalar dependências
+        working-directory: analytics-service
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # compileall gera o bytecode de todos os .py sem executá-los. Importante:
+      # app.py chama sys.exit() no import quando faltam variáveis de ambiente,
+      # então um "import app" quebraria o CI — compileall não tem esse problema.
+      - name: 🏗️ Compilar (bytecode)
+        working-directory: analytics-service
+        run: python -m compileall -q .
+
+      # O serviço ainda não tem testes. O passo detecta a suíte quando ela for
+      # adicionada (test_*.py, *_test.py ou tests/) e passa a valer como gate.
+      - name: 🧪 Testes unitários
+        working-directory: analytics-service
+        run: |
+          shopt -s nullglob
+          TESTS=(test_*.py *_test.py)
+          if [ ${#TESTS[@]} -gt 0 ] || [ -d tests ]; then
+            pip install pytest pytest-cov
+            pytest -v --cov=. --cov-report=term-missing
+          else
+            echo "Nenhum teste unitário encontrado — etapa ignorada."
+            echo "_Nenhum teste unitário encontrado (\`test_*.py\`, \`*_test.py\` ou \`tests/\`)._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Linter / Static Analysis
+  # ───────────────────────────────────────────────────────────────────────────
+  lint:
+    name: 🧹 Linter / Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Instalar linters
+        run: pip install "flake8==${FLAKE8_VERSION}" "pylint==${PYLINT_VERSION}"
+
+      # Bloqueante. Ruleset em .flake8 na raiz do repositório: erros reais
+      # (pyflakes F###, sintaxe E9##, complexidade C901) reprovam o job;
+      # divergências puramente cosméticas de PEP 8 são toleradas.
+      - name: 🔍 flake8
+        run: flake8 analytics-service
+
+      # Informativo (--exit-zero). O pylint é muito mais opinativo que o
+      # flake8; serve aqui como relatório de qualidade, não como gate.
+      - name: 📋 pylint (informativo)
+        run: |
+          pylint analytics-service \
+            --exit-zero \
+            --disable=C0114,C0115,C0116 \
+            --max-line-length=120 \
+            --output-format=text \
+            | tee pylint-analytics-service.txt
+          {
+            echo "### 📋 pylint — \`${SERVICE_NAME}\` (informativo)"
+            echo
+            echo '```'
+            head -c 40000 pylint-analytics-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 📤 Publicar relatório do pylint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pylint-analytics-service
+          path: pylint-analytics-service.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Security Scan (SCA + SAST)
+  #
+  # Regra de bloqueio: qualquer vulnerabilidade CRITICAL nas dependências
+  # (SCA) ou achado de severidade HIGH no código (SAST) reprova o pipeline e
+  # impede que o job 4 rode — a imagem nunca chega ao ECR.
+  # ───────────────────────────────────────────────────────────────────────────
+  security-scan:
+    name: 🛡️ Security Scan (SCA + SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ── SCA — Software Composition Analysis ────────────────────────────────
+      # Trivy em modo fs: lê o requirements.txt e cruza as versões pinadas
+      # com as bases de CVE (NVD, GHSA, OSV).
+      - name: 🧾 SCA · Trivy fs — relatório completo (informativo)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          scan-ref: analytics-service
+          scanners: vuln,secret
+          format: table
+          output: trivy-sca-analytics-service.txt
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: 📄 Publicar relatório SCA no summary
+        run: |
+          {
+            echo "### 🧾 SCA — Trivy \`fs\` (\`${SERVICE_NAME}\`)"
+            echo
+            echo '```'
+            head -c 60000 trivy-sca-analytics-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🚫 SCA · Gate — falha se houver CRITICAL nas dependências
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          scan-ref: analytics-service
+          scanners: vuln
+          format: table
+          severity: CRITICAL
+          # Só bloqueia CVE CRITICAL que já tenha correção publicada.
+          # Sem isso o gate trava em CVE sem patch upstream (ex.: perl-base
+          # "affected"/"fix_deferred" na base python:3.12-slim), que nenhum
+          # rebuild resolve — um gate impossível de passar não protege nada.
+          # Os achados sem correção seguem visíveis no relatório informativo.
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # ── SAST — Static Application Security Testing ─────────────────────────
+      - name: 📦 Instalar bandit
+        run: pip install "bandit==${BANDIT_VERSION}"
+
+      - name: 🧾 SAST · bandit — relatório completo (informativo)
+        run: |
+          bandit -r analytics-service -f screen --exit-zero | tee bandit-analytics-service.txt
+          bandit -r analytics-service -f json -o bandit-analytics-service.json --exit-zero
+          {
+            echo "### 🧾 SAST — bandit (\`${SERVICE_NAME}\`)"
+            echo
+            echo '```'
+            head -c 40000 bandit-analytics-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Gate: só reprova em achados de severidade HIGH com confiança >= MEDIUM.
+      # Achados MEDIUM (ex.: B104 bind em 0.0.0.0, esperado num container)
+      # continuam visíveis no relatório acima sem travar o pipeline.
+      - name: 🚫 SAST · Gate — falha em achados HIGH no código
+        run: bandit -r analytics-service --severity-level high --confidence-level medium
+
+      - name: 📤 Publicar relatórios como artefatos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-analytics-service
+          path: |
+            trivy-sca-analytics-service.txt
+            bandit-analytics-service.txt
+            bandit-analytics-service.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Docker Build, Container Scan & Push no ECR
+  # ───────────────────────────────────────────────────────────────────────────
+  docker:
+    name: 🐳 Docker Build, Scan & Push
+    runs-on: ubuntu-latest
+    needs: [build-test, lint, security-scan]
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # Em Pull Request, github.sha aponta para o merge commit sintético.
+      # Usamos o SHA real do último commit do PR para que a tag da imagem
+      # corresponda ao commit que a pessoa realmente enviou.
+      - name: 🏷️ Calcular a tag da imagem
+        id: meta
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${SERVICE_VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Tag da imagem: v${SERVICE_VERSION}-${SHORT_SHA}"
+
+      - name: 🐳 Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # load: true carrega a imagem no daemon local do runner para que o
+      # Trivy possa escaneá-la ANTES de qualquer push. Nada é publicado aqui.
+      - name: 🔨 Build da imagem
+        uses: docker/build-push-action@v6
+        with:
+          context: ./analytics-service
+          file: ./analytics-service/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          provenance: false
+          cache-from: type=gha,scope=analytics-service
+          cache-to: type=gha,mode=max,scope=analytics-service
+
+      - name: 🧾 Container Scan · Trivy image — relatório (informativo)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: image
+          image-ref: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          format: table
+          output: trivy-image-analytics-service.txt
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: 📄 Publicar relatório do container no summary
+        run: |
+          {
+            echo "### 🐳 Container Scan — \`${SERVICE_NAME}:${{ steps.meta.outputs.tag }}\`"
+            echo
+            echo '```'
+            head -c 60000 trivy-image-analytics-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🚫 Container Scan · Gate — falha se a imagem tiver CRITICAL
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: image
+          image-ref: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          format: table
+          severity: CRITICAL
+          # Só bloqueia CVE CRITICAL que já tenha correção publicada.
+          # Sem isso o gate trava em CVE sem patch upstream (ex.: perl-base
+          # "affected"/"fix_deferred" na base python:3.12-slim), que nenhum
+          # rebuild resolve — um gate impossível de passar não protege nada.
+          # Os achados sem correção seguem visíveis no relatório informativo.
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: 📤 Publicar relatório do container como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-scan-analytics-service
+          path: trivy-image-analytics-service.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ── Push no ECR — somente em push na main ──────────────────────────────
+      # Credenciais do Learner Lab: chave temporária + session token, rotacionadas
+      # a cada sessão do laboratório. Precisam ser reconfiguradas nos secrets do
+      # repositório sempre que o lab é reiniciado. Não há OIDC porque o Learner
+      # Lab bloqueia iam:CreateOpenIDConnectProvider.
+      - name: 🔑 Configurar credenciais AWS
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔐 Login no Amazon ECR
+        id: ecr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 🚀 Tag e push para o ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Os repositórios ECR são criados pelo Terraform (módulo ecr). Se o
+          # repositório não existir, falhamos com uma mensagem acionável em vez
+          # de criar recurso fora do state do Terraform.
+          if ! aws ecr describe-repositories \
+                 --repository-names "$ECR_REPOSITORY" \
+                 --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "::error::Repositório ECR '$ECR_REPOSITORY' não existe. Rode 'terraform apply' em terraform/."
+            exit 1
+          fi
+
+          docker tag "$SERVICE_NAME:$TAG" "$REGISTRY/$ECR_REPOSITORY:$TAG"
+          docker tag "$SERVICE_NAME:$TAG" "$REGISTRY/$ECR_REPOSITORY:latest"
+
+          docker push "$REGISTRY/$ECR_REPOSITORY:$TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+
+          {
+            echo "### 🚀 Imagem publicada no ECR"
+            echo
+            echo "| Campo | Valor |"
+            echo "| --- | --- |"
+            echo "| Repositório | \`$REGISTRY/$ECR_REPOSITORY\` |"
+            echo "| Tag imutável | \`$TAG\` |"
+            echo "| Tag móvel | \`latest\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ℹ️ Push ignorado (Pull Request)
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### ℹ️ Push para o ECR ignorado"
+            echo
+            echo "Em Pull Request a imagem \`${SERVICE_NAME}:${{ steps.meta.outputs.tag }}\` é construída e escaneada, mas não publicada."
+            echo "O push acontece somente em \`push\` na branch \`main\`."
+          } >> "$GITHUB_STEP_SUMMARY"

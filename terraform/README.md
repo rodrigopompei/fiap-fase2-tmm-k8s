@@ -12,7 +12,7 @@ principalmente na parte de IAM. A seção seguinte explica o que muda e por quê
 > aplicada na conta `056007986659`: 66 recursos criados, cluster EKS `v1.33.13`
 > com 2 nodes `Ready`, os 4 add-ons Helm `deployed`, e em seguida 66 recursos
 > destruídos sem deixar nada faturando. O log completo de comandos, resultados e
-> os 10 bugs encontrados no caminho está em [EXECUCAO.md](EXECUCAO.md).
+> os 12 bugs encontrados no caminho está em [EXECUCAO.md](EXECUCAO.md).
 
 ---
 
@@ -108,31 +108,60 @@ módulos reutilizáveis fora do laboratório.
 | Ferramenta | Versão | Nesta máquina |
 |---|---|---|
 | `terraform` | ≥ 1.5 | sim |
-| `aws` CLI | v1 ou v2 | **v1** (`1.45.46`, via snap) |
+| `aws` CLI | v1 ou v2 | **v2** (`2.35.21`, snap canal `v2/stable`) |
 | `kubectl` | — | sim |
 | `helm` | — | sim (o Terraform chama o provider, não o binário) |
 | `docker` | — | para build das imagens |
 
-> **AWS CLI v1:** a flag `--no-cli-pager`, presente em todos os comandos do
-> [README da raiz](../README.md), **não existe na v1** e faz o comando falhar
-> com `Unknown options`. Remova-a ao reaproveitar aqueles comandos. A stack em
-> si não é afetada: o `aws eks get-token` usado pelos providers `helm` e
-> `kubernetes` funciona nas duas versões.
-
-As credenciais do laboratório já estão no perfil **`fiapaws`** desta máquina.
-Como não existe perfil `[default]`, selecione-o explicitamente:
+A máquina rodou a v1 durante boa parte deste projeto, o que custou três
+diagnósticos falsos (registrados em [EXECUCAO.md](EXECUCAO.md)). A migração para
+a v2 foi feita com:
 
 ```bash
-export AWS_PROFILE=fiapaws
-export AWS_REGION=us-east-1
+sudo snap refresh aws-cli --channel=v2/stable
+```
+
+> **`snap refresh aws-cli` sozinho não migra.** O canal `latest/stable` do snap
+> está fixado na v1, então um refresh simples responde
+> `no updates available`. É preciso trocar de canal explicitamente.
+
+<details>
+<summary>Se você estiver na v1, três armadilhas a conhecer</summary>
+
+- `--no-cli-pager` **não existe na v1** e falha com `Unknown options`. Ela
+  aparece em todos os comandos do [README da raiz](../README.md).
+- A v1 lê `AWS_DEFAULT_REGION` e **ignora `AWS_REGION`**. Exportar só a segunda
+  produz `You must specify a region`.
+- `output = none` no profile é **válido na v2 e inválido na v1**. Com ele, todo
+  comando sem `--output` explícito falha com `Unknown output type: none`
+  *depois* de a chamada ter dado certo — o sintoma imita perda de permissões em
+  massa. Corrija com `aws configure set output json`.
+
+</details>
+
+A stack não é afetada por nenhuma das duas versões: o `aws eks get-token` usado
+pelos providers `helm` e `kubernetes` existe em ambas, o Terraform recebe a
+região por variável, e os scripts deste diretório passam `--output` e `--region`
+explicitamente.
+
+> **Cuidado com a v2:** ela pagina a saída em terminal interativo, o que trava
+> scripts que esperam saída direta. Se incomodar:
+> `aws configure set cli_pager ""`.
+
+Cole as credenciais da aba **AWS Details > AWS CLI** do AWS Academy em
+`~/.aws/credentials` — mantendo o `aws_session_token`, que é obrigatório. Se
+usar um profile nomeado em vez de `[default]`, exporte-o:
+
+```bash
+export AWS_PROFILE=<seu-profile>     # dispensável se usar [default]
+export AWS_DEFAULT_REGION=us-east-1
 
 aws sts get-caller-identity
 # Arn deve conter assumed-role/voclabs/...
 ```
 
-As credenciais expiram ao fim da sessão (~4 horas). Para renovar, copie o bloco
-da aba **AWS Details > AWS CLI** no AWS Academy para `~/.aws/credentials`, sob o
-cabeçalho `[fiapaws]` — mantendo o `aws_session_token`, que é obrigatório.
+As credenciais expiram ao fim da sessão (~4 horas) e mudam a cada reinício do
+laboratório, então esse passo se repete a cada sessão.
 
 > Mantenha `~/.aws/credentials` com permissão `600`. O arquivo desta máquina
 > estava `644` (legível por qualquer usuário do sistema) e foi corrigido.
@@ -404,13 +433,31 @@ mas se isso aparecer, quebre em duas fases:
 `terraform apply`.
 
 **`Unknown options: --no-cli-pager`**
-Você está no AWS CLI v1 (é o caso desta máquina: `1.45.46`). Essa flag é
-exclusiva da v2 e aparece em todos os comandos do [README da raiz](../README.md),
-escrito para v2 em PowerShell. Basta removê-la; nada mais muda.
+Você está no AWS CLI v1. Essa flag é exclusiva da v2 e aparece em todos os
+comandos do [README da raiz](../README.md). Remova-a, ou migre para a v2 com
+`sudo snap refresh aws-cli --channel=v2/stable`.
 
 **`You must specify a region` mesmo com `AWS_REGION` exportado**
 O AWS CLI v1 lê `AWS_DEFAULT_REGION` e ignora `AWS_REGION` (essa só vale na v2 e
 nos SDKs). Exporte `AWS_DEFAULT_REGION=us-east-1`. O Terraform não é afetado.
+
+**Muitas permissões "negadas" de uma vez, mas a identidade funciona**
+Quase sempre **não** é permissão. Rode `./scripts/check-lab-capabilities.sh`, que
+detecta a causa mais comum: um `output` inválido no profile (`output = none` é
+válido na v2 e inválido na v1). Nesse caso a chamada à API tem sucesso e o
+comando morre ao formatar a resposta:
+
+```
+Unknown output type: none
+```
+
+Corrija com `aws configure set output json`. Para investigar qualquer sonda que
+esteja acusando falha, rode o comando sem suprimir o `stderr` — o script
+esconde a mensagem de erro por design.
+
+**`snap refresh aws-cli` responde `no updates available` e continua na v1**
+O canal `latest/stable` do snap está fixado na v1. Troque de canal:
+`sudo snap refresh aws-cli --channel=v2/stable`.
 
 **`terraform apply` termina com exit 1 e log vazio**
 Acontece ao rodar o Terraform desacoplado do terminal (background): o

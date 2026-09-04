@@ -14,19 +14,32 @@ ambiente do zero.
 Todos os comandos assumem estas variáveis exportadas:
 
 ```bash
-export AWS_PROFILE=fiapaws
 export AWS_DEFAULT_REGION=us-east-1
-export AWS_REGION=us-east-1
+# export AWS_PROFILE=<profile>   # apenas se as credenciais não estiverem em [default]
 ```
 
-> **Duas pegadinhas do ambiente, ambas descobertas na prática:**
+> **Três pegadinhas do ambiente, todas descobertas na prática.** O AWS CLI aqui
+> é a **v1** (`1.45.46`):
 >
-> 1. `AWS_PROFILE` é obrigatório — esta máquina não tem perfil `[default]`, e
->    sem ele o CLI responde `Unable to locate credentials`.
-> 2. O AWS CLI aqui é a **v1**, que lê `AWS_DEFAULT_REGION` e **ignora**
->    `AWS_REGION` (essa só vale na v2 e nos SDKs). Exportar apenas `AWS_REGION`
->    produz `You must specify a region`. O Terraform não é afetado, pois recebe
->    a região por variável.
+> 1. A v1 lê `AWS_DEFAULT_REGION` e **ignora `AWS_REGION`** (essa só vale na v2
+>    e nos SDKs). Exportar apenas `AWS_REGION` produz
+>    `You must specify a region`.
+> 2. `output = none` no profile é válido na v2 e **inválido na v1**, fazendo
+>    todo comando sem `--output` falhar na formatação — ver
+>    [Problema 10](#10-output--none-no-profile-simulando-falta-de-permissão-em-massa).
+> 3. As credenciais mudam a cada reinício do laboratório. Durante esta execução
+>    o profile passou de `fiapaws` para `[default]`, o que quebrou comandos que
+>    fixavam `AWS_PROFILE=fiapaws`.
+>
+> O Terraform não é afetado por nenhuma delas: recebe a região por variável e
+> resolve credenciais pela cadeia padrão.
+
+> **Atualização posterior (2026-09-03):** a máquina foi migrada para o AWS CLI
+> **v2** (`2.35.21`) com
+> `sudo snap refresh aws-cli --channel=v2/stable` — o refresh sem `--channel`
+> não migra, porque `latest/stable` está fixado na v1. Com isso, as pegadinhas
+> 1 e 2 acima deixam de valer. O log a seguir preserva o que foi observado na
+> v1, que é o que de fato aconteceu durante o provisionamento.
 
 ---
 
@@ -392,7 +405,7 @@ ficaria reservado por 7 dias e o apply seguinte falharia com
 
 ## Problemas encontrados e correções
 
-Dez achados: cinco de código, três de ambiente e dois de premissa
+Doze achados: seis de código, quatro de ambiente e dois de premissa
 documentada. Os de código estão corrigidos no repositório.
 
 ### 1. `Invalid for_each argument`
@@ -502,6 +515,18 @@ terraform state list | wc -l
 terraform plan -detailed-exitcode     # 0 = convergido, 2 = há mudanças
 ```
 
+**Refinamento:** o problema não é só o background. **Redirecionar direto para
+arquivo** (`>`) também perde a saída — o arquivo é criado com 0 bytes e o
+comando sai com 0:
+
+```bash
+terraform show -json plan.bin > out.json    # 0 bytes, exit 0
+terraform show -json plan.bin | cat > out.json   # funciona
+```
+
+Encanar (`|`) preserva a saída. Use `| cat > arquivo` ou `| tee arquivo` quando
+precisar persistir a saída de um comando Terraform nesta máquina.
+
 ### 7. `kubectl run --rm` exige `--attach`
 
 ```
@@ -535,7 +560,73 @@ tudo, inclusive os 4 charts Helm, sem `-target`. O Terraform não precisa
 contatar o cluster para *planejar* um `helm_release`. A abordagem em duas fases
 passou a ser documentada como **fallback**.
 
-### 10. Valores sensíveis em `for_each`
+### 10. `output = none` no profile simulando falta de permissão em massa
+
+Numa reexecução do `check-lab-capabilities.sh`, **10 das 10** sondas de serviço
+falharam (`eks:ListClusters`, `ec2:DescribeVpcs`, `s3:ListBuckets`, ...) enquanto
+identidade e IAM continuavam OK. O sintoma sugeria perda de permissões.
+
+**Causa real:** o profile `[default]` do `~/.aws/config` tinha
+`output = none` — um formato **válido no AWS CLI v2, inexistente na v1**. Todo
+comando *sem* `--output` explícito falhava na **formatação da resposta**, depois
+de a chamada à API ter tido sucesso:
+
+```
+Unknown output type: none
+```
+
+Os checks que passavam eram justamente os que já usavam `--output text`. O aviso
+de `iam:ListOpenIDConnectProviders negado` era falso negativo pelo mesmo motivo.
+
+**Correção em duas frentes:**
+
+```bash
+aws configure set output json        # ambiente
+```
+
+e, no script, `--output json` explícito na função `probe`, para que a sonda não
+dependa da configuração do usuário. Além disso, foi acrescentada uma seção
+"Configuracao do AWS CLI" que detecta esse caso e imprime o diagnóstico certo em
+vez de deixar o sintoma enganar.
+
+**Lição:** uma sonda que suprime `stderr` (`2>/dev/null`) precisa distinguir
+*falha de autorização* de *falha de execução*. Duas vezes neste projeto o mesmo
+descuido produziu um "negado" que não existia — ver também
+[Problema 2](#2-sonda-de-iam-dando-falso-negativo).
+
+### 11. `enable_irsa = true` num `terraform.tfvars` editado
+
+Um `terraform.tfvars` renomeado para `terraform.tfvars.orig` continha
+`enable_irsa = true` (e `cluster_version = "1.36"`). Como o Terraform não lê
+arquivos `.orig`, o apply seguia usando os defaults e o problema ficava latente.
+
+Sonda definitiva, sem criar nada — a IAM autoriza **antes** de validar a
+entrada, então uma URL inválida devolve `AccessDenied` se a permissão faltar:
+
+```bash
+aws iam create-open-id-connect-provider \
+  --url "http://invalid-not-https.example.com" \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 0000000000000000000000000000000000000000
+```
+
+**Resultado:**
+
+```
+An error occurred (AccessDenied) when calling the CreateOpenIDConnectProvider
+operation: ... is not authorized to perform: iam:CreateOpenIDConnectProvider
+```
+
+Confirmado que a conta não tem OIDC provider algum depois da sonda. Portanto
+`enable_irsa = true` **falharia o apply**. A sonda foi incorporada ao
+`check-lab-capabilities.sh`, e `*.orig` / `*.rej` entraram no `.gitignore` —
+sem isso, `terraform.tfvars.orig` seria commitado (o padrão `*.tfvars` não casa
+com `.orig`).
+
+`cluster_version = "1.36"`, por outro lado, é válido: consta da lista oferecida
+pela região.
+
+### 12. Valores sensíveis em `for_each`
 
 O Terraform proíbe valores sensíveis (ou derivados deles) como chave de
 `for_each`. Como as DATABASE_URLs derivam de `random_password`, iterar sobre o
@@ -565,7 +656,7 @@ teste isolado antes de ser adotado.
 | Segredos / ECR | 6 segredos, 5 repositórios |
 | **Destroy** | **66 recursos destruídos** |
 | Recursos faturáveis remanescentes | nenhum (7 verificações vazias) |
-| Bugs encontrados e corrigidos | 10 |
+| Bugs encontrados e corrigidos | 12 |
 
 ### O que ficou comprovado sobre o Learner Lab
 

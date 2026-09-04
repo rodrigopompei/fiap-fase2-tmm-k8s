@@ -1,0 +1,424 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI/CD — evaluation-service (Go 1.21)
+#
+# Quatro estágios encadeados:
+#   1. build-test      → compila e roda os testes unitários
+#   2. lint            → golangci-lint + gofmt
+#   3. security-scan   → SCA (Trivy fs) + SAST (gosec) — barra CRITICAL
+#   4. docker          → build da imagem, scan do container e push no ECR
+#
+# Os três primeiros jobs rodam em paralelo; o docker só começa depois que
+# todos passam. O push para o ECR acontece apenas em push na branch main —
+# em Pull Request a imagem é construída e escaneada, mas nunca publicada.
+# ─────────────────────────────────────────────────────────────────────────────
+name: ⚖️ evaluation-service CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'evaluation-service/**'
+      - '.golangci.yml'
+      - '.github/workflows/evaluation-service.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'evaluation-service/**'
+      - '.golangci.yml'
+      - '.github/workflows/evaluation-service.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: evaluation-service-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SERVICE_NAME: evaluation-service
+  # Versão semântica do serviço. A tag da imagem vira v<SERVICE_VERSION>-<sha7>.
+  # Bump manual a cada release (espelha K8s/evaluation-service/deployment.yaml).
+  SERVICE_VERSION: '1.0.0'
+  GO_VERSION: '1.21'
+  GOLANGCI_LINT_VERSION: v1.64.8
+  GOSEC_VERSION: v2.29.0
+  # O AWS Academy Learner Lab só libera us-east-1.
+  AWS_REGION: us-east-1
+  # Criado pelo módulo terraform/modules/ecr (prefixo "fiap-fase2").
+  ECR_REPOSITORY: fiap-fase2/evaluation-service
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Build & Unit Test
+  # ───────────────────────────────────────────────────────────────────────────
+  build-test:
+    name: 🔨 Build & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐹 Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: evaluation-service/go.mod
+
+      # O Dockerfile copia apenas go.mod e usa GOFLAGS=-mod=mod, ou seja, o
+      # go.sum nunca é validado no build da imagem. No CI queremos hashes
+      # verificáveis, então normalizamos: descartamos um go.sum corrompido
+      # (sem linhas "h1:") e deixamos o go mod tidy reconstruí-lo.
+      # O go.sum versionado neste serviço é hoje uma cópia do go.mod.
+      - name: 🧹 Normalizar go.mod / go.sum
+        working-directory: evaluation-service
+        run: |
+          if [ -f go.sum ] && ! grep -q ' h1:' go.sum; then
+            echo "::warning::go.sum inválido — será regenerado pelo go mod tidy"
+            rm -f go.sum
+          fi
+          go mod tidy
+          go mod verify
+
+      - name: 🏗️ Compilar
+        working-directory: evaluation-service
+        run: go build -v ./...
+
+      - name: 🔎 go vet
+        working-directory: evaluation-service
+        run: go vet ./...
+
+      # O serviço ainda não tem arquivos _test.go. O comando é idempotente:
+      # sai com 0 e imprime "no test files" enquanto não houver testes, e
+      # passa a valer como gate assim que o primeiro teste for adicionado.
+      - name: 🧪 Testes unitários
+        working-directory: evaluation-service
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: 📊 Resumo de cobertura
+        working-directory: evaluation-service
+        run: |
+          {
+            echo "### 🔨 Build & Unit Test — \`${SERVICE_NAME}\`"
+            echo
+            if [ -f coverage.out ]; then
+              echo '```'
+              go tool cover -func=coverage.out | tail -20
+              echo '```'
+            else
+              echo "_Nenhum teste unitário encontrado (nenhum arquivo \`_test.go\`)._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Linter / Static Analysis
+  # ───────────────────────────────────────────────────────────────────────────
+  lint:
+    name: 🧹 Linter / Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐹 Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: evaluation-service/go.mod
+
+      - name: 🧹 Normalizar go.mod / go.sum
+        working-directory: evaluation-service
+        run: |
+          if [ -f go.sum ] && ! grep -q ' h1:' go.sum; then
+            rm -f go.sum
+          fi
+          go mod tidy
+
+      # Bloqueante: qualquer achado de errcheck/govet/staticcheck/gosimple/
+      # ineffassign/unused reprova o job. Ruleset em .golangci.yml.
+      - name: 🔍 golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: evaluation-service
+          args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
+
+      # Informativo: formatação não reprova o build, só anota o que está fora
+      # do padrão gofmt para ser corrigido com "gofmt -w .".
+      - name: 🎨 gofmt (informativo)
+        working-directory: evaluation-service
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "::warning::Arquivos fora do padrão gofmt: $UNFORMATTED"
+            {
+              echo "### 🎨 gofmt"
+              echo
+              echo "Arquivos que precisam de \`gofmt -w .\`:"
+              echo '```'
+              echo "$UNFORMATTED"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Todos os arquivos estão formatados." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Security Scan (SCA + SAST)
+  #
+  # Regra de bloqueio: qualquer vulnerabilidade CRITICAL nas dependências
+  # (SCA) ou achado de severidade HIGH no código (SAST) reprova o pipeline e
+  # impede que o job 4 rode — a imagem nunca chega ao ECR.
+  # ───────────────────────────────────────────────────────────────────────────
+  security-scan:
+    name: 🛡️ Security Scan (SCA + SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐹 Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: evaluation-service/go.mod
+
+      # O Trivy precisa de um go.sum consistente para resolver o grafo real
+      # de dependências em vez de confiar só nas versões mínimas do go.mod.
+      - name: 🧹 Normalizar go.mod / go.sum
+        working-directory: evaluation-service
+        run: |
+          if [ -f go.sum ] && ! grep -q ' h1:' go.sum; then
+            rm -f go.sum
+          fi
+          go mod tidy
+
+      # ── SCA — Software Composition Analysis ────────────────────────────────
+      - name: 🧾 SCA · Trivy fs — relatório completo (informativo)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          scan-ref: evaluation-service
+          scanners: vuln,secret
+          format: table
+          output: trivy-sca-evaluation-service.txt
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: 📄 Publicar relatório SCA no summary
+        run: |
+          {
+            echo "### 🧾 SCA — Trivy \`fs\` (\`${SERVICE_NAME}\`)"
+            echo
+            echo '```'
+            head -c 60000 trivy-sca-evaluation-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🚫 SCA · Gate — falha se houver CRITICAL nas dependências
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          scan-ref: evaluation-service
+          scanners: vuln
+          format: table
+          severity: CRITICAL
+          # Só bloqueia CVE CRITICAL que já tenha correção publicada.
+          # Sem isso o gate trava em CVE sem patch upstream (ex.: perl-base
+          # "affected"/"fix_deferred" na base python:3.12-slim), que nenhum
+          # rebuild resolve — um gate impossível de passar não protege nada.
+          # Os achados sem correção seguem visíveis no relatório informativo.
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # ── SAST — Static Application Security Testing ─────────────────────────
+      # Binário pré-compilado do gosec, com versão pinada: não depende do
+      # toolchain Go do job nem de uma action de terceiro sem tag fixa.
+      - name: ⬇️ Instalar gosec
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/securego/gosec/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${GOSEC_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 🧾 SAST · gosec — relatório completo (informativo)
+        working-directory: evaluation-service
+        run: |
+          gosec -fmt=sarif -out=../gosec-evaluation-service.sarif -no-fail ./...
+          gosec -fmt=text -no-fail ./... | tee ../gosec-evaluation-service.txt
+
+      # G704 (SSRF via taint analysis) é uma exceção TRIADA, não um silenciamento
+      # genérico. Em fetchFlag()/fetchRule() o host de destino vem de variável de
+      # ambiente confiável (FLAG_SERVICE_URL / TARGETING_SERVICE_URL); só o
+      # segmento de path deriva do query param "flag_name". A análise de taint do
+      # gosec não reconhece nenhum sanitizador para esse caminho — nem
+      # url.PathEscape zera o achado — então não há como resolvê-lo em código.
+      # Os 4 achados continuam no relatório informativo e no SARIF publicado
+      # como artefato. TODO: validar "flag_name" contra um allowlist (ex.:
+      # ^[a-zA-Z0-9_-]{1,64}$) na entrada do handler e reavaliar esta exceção.
+      #
+      # Note que G401/G505 (crypto/sha1 em getDeterministicBucket, usado para
+      # bucketing de rollout e não para segurança) são MEDIUM e por isso já não
+      # alcançam este gate — não precisam de exclusão explícita.
+      - name: 🚫 SAST · Gate — falha em achados HIGH no código
+        working-directory: evaluation-service
+        run: gosec -severity=high -confidence=medium -exclude=G704 ./...
+
+      - name: 📤 Publicar relatórios como artefatos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-evaluation-service
+          path: |
+            trivy-sca-evaluation-service.txt
+            gosec-evaluation-service.sarif
+            gosec-evaluation-service.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Docker Build, Container Scan & Push no ECR
+  # ───────────────────────────────────────────────────────────────────────────
+  docker:
+    name: 🐳 Docker Build, Scan & Push
+    runs-on: ubuntu-latest
+    needs: [build-test, lint, security-scan]
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # Em Pull Request, github.sha aponta para o merge commit sintético.
+      # Usamos o SHA real do último commit do PR para que a tag da imagem
+      # corresponda ao commit que a pessoa realmente enviou.
+      - name: 🏷️ Calcular a tag da imagem
+        id: meta
+        run: |
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${SERVICE_VERSION}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Tag da imagem: v${SERVICE_VERSION}-${SHORT_SHA}"
+
+      - name: 🐳 Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # load: true carrega a imagem no daemon local do runner para que o
+      # Trivy possa escaneá-la ANTES de qualquer push. Nada é publicado aqui.
+      - name: 🔨 Build da imagem
+        uses: docker/build-push-action@v6
+        with:
+          context: ./evaluation-service
+          file: ./evaluation-service/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          provenance: false
+          cache-from: type=gha,scope=evaluation-service
+          cache-to: type=gha,mode=max,scope=evaluation-service
+
+      - name: 🧾 Container Scan · Trivy image — relatório (informativo)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: image
+          image-ref: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          format: table
+          output: trivy-image-evaluation-service.txt
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: 📄 Publicar relatório do container no summary
+        run: |
+          {
+            echo "### 🐳 Container Scan — \`${SERVICE_NAME}:${{ steps.meta.outputs.tag }}\`"
+            echo
+            echo '```'
+            head -c 60000 trivy-image-evaluation-service.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🚫 Container Scan · Gate — falha se a imagem tiver CRITICAL
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: image
+          image-ref: ${{ env.SERVICE_NAME }}:${{ steps.meta.outputs.tag }}
+          format: table
+          severity: CRITICAL
+          # Só bloqueia CVE CRITICAL que já tenha correção publicada.
+          # Sem isso o gate trava em CVE sem patch upstream (ex.: perl-base
+          # "affected"/"fix_deferred" na base python:3.12-slim), que nenhum
+          # rebuild resolve — um gate impossível de passar não protege nada.
+          # Os achados sem correção seguem visíveis no relatório informativo.
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: 📤 Publicar relatório do container como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-scan-evaluation-service
+          path: trivy-image-evaluation-service.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ── Push no ECR — somente em push na main ──────────────────────────────
+      # Credenciais do Learner Lab: chave temporária + session token, rotacionadas
+      # a cada sessão do laboratório. Precisam ser reconfiguradas nos secrets do
+      # repositório sempre que o lab é reiniciado. Não há OIDC porque o Learner
+      # Lab bloqueia iam:CreateOpenIDConnectProvider.
+      - name: 🔑 Configurar credenciais AWS
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔐 Login no Amazon ECR
+        id: ecr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 🚀 Tag e push para o ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Os repositórios ECR são criados pelo Terraform (módulo ecr). Se o
+          # repositório não existir, falhamos com uma mensagem acionável em vez
+          # de criar recurso fora do state do Terraform.
+          if ! aws ecr describe-repositories \
+                 --repository-names "$ECR_REPOSITORY" \
+                 --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "::error::Repositório ECR '$ECR_REPOSITORY' não existe. Rode 'terraform apply' em terraform/."
+            exit 1
+          fi
+
+          docker tag "$SERVICE_NAME:$TAG" "$REGISTRY/$ECR_REPOSITORY:$TAG"
+          docker tag "$SERVICE_NAME:$TAG" "$REGISTRY/$ECR_REPOSITORY:latest"
+
+          docker push "$REGISTRY/$ECR_REPOSITORY:$TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+
+          {
+            echo "### 🚀 Imagem publicada no ECR"
+            echo
+            echo "| Campo | Valor |"
+            echo "| --- | --- |"
+            echo "| Repositório | \`$REGISTRY/$ECR_REPOSITORY\` |"
+            echo "| Tag imutável | \`$TAG\` |"
+            echo "| Tag móvel | \`latest\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ℹ️ Push ignorado (Pull Request)
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### ℹ️ Push para o ECR ignorado"
+            echo
+            echo "Em Pull Request a imagem \`${SERVICE_NAME}:${{ steps.meta.outputs.tag }}\` é construída e escaneada, mas não publicada."
+            echo "O push acontece somente em \`push\` na branch \`main\`."
+          } >> "$GITHUB_STEP_SUMMARY"
