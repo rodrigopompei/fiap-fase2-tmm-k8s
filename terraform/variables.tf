@@ -239,3 +239,9 @@ variable "enable_secrets_store_csi_driver" {
   type        = bool
   default     = true
 }
+
+variable "enable_argocd" {
+  description = "Instala o ArgoCD para GitOps contínuo na cluster."
+  type        = bool
+  default     = false
+}

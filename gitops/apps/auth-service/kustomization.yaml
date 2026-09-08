@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: auth-service
+
+# Inclui todos os YAMLs neste diretório
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - serviceaccount.yaml
+  - namespace.yaml
+  - secretproviderclass.yaml
+
+# CommonLabels aplicadas a todos os recursos
+commonLabels:
+  app: auth-service
+  managed-by: argocd
+
+# Patches para atualizar a imagem (usado pela CI/CD para atualizar a tag)
+# Exemplo: kustomize edit set image auth-service=<registry>/<repo>:tag
+images:
+  - name: auth-service
+    newName: 056007986659.dkr.ecr.us-east-1.amazonaws.com/fiap-fase2/auth-service
+    newTag: 1.0.3

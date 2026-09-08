@@ -1,0 +1,120 @@
+---
+# ArgoCD Applications para os 5 microserviços
+# Cada aplicação monitora uma pasta do repositório e sincroniza automaticamente
+# quando a imagem (tag) é atualizada
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: auth-service
+  namespace: argocd
+spec:
+  # Projeto ao qual a aplicação pertence (default = 'default')
+  project: default
+
+  # Fonte (repositório + caminho)
+  source:
+    repoURL: https://github.com/rodrigopompei/fiap-fase2-tmm-k8s.git
+    targetRevision: main
+    path: gitops/apps/auth-service
+
+  # Destino (cluster + namespace)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: auth-service
+
+  # Sincronização automática quando o repositório muda
+  syncPolicy:
+    automated:
+      prune: true      # Remove recursos que foram deletados do Git
+      selfHeal: true   # Sincroniza se o cluster divergir do Git
+    syncOptions:
+      - CreateNamespace=true  # Cria namespace se não existir
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: flag-service
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rodrigopompei/fiap-fase2-tmm-k8s.git
+    targetRevision: main
+    path: gitops/apps/flag-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: flag-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: evaluation-service
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rodrigopompei/fiap-fase2-tmm-k8s.git
+    targetRevision: main
+    path: gitops/apps/evaluation-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: evaluation-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: targeting-service
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rodrigopompei/fiap-fase2-tmm-k8s.git
+    targetRevision: main
+    path: gitops/apps/targeting-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: targeting-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: analytics-service
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/rodrigopompei/fiap-fase2-tmm-k8s.git
+    targetRevision: main
+    path: gitops/apps/analytics-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: analytics-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

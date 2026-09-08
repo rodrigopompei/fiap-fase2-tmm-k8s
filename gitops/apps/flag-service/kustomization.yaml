@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: flag-service
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - serviceaccount.yaml
+  - namespace.yaml
+  - secretproviderclass.yaml
+
+commonLabels:
+  app: flag-service
+  managed-by: argocd
+
+images:
+  - name: flag-service
+    newName: 056007986659.dkr.ecr.us-east-1.amazonaws.com/fiap-fase2/flag-service
+    newTag: 1.0.1

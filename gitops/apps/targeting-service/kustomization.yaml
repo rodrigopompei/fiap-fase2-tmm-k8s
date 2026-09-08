@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: targeting-service
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - serviceaccount.yaml
+  - namespace.yaml
+  - secretproviderclass.yaml
+
+commonLabels:
+  app: targeting-service
+  managed-by: argocd
+
+images:
+  - name: targeting-service
+    newName: 056007986659.dkr.ecr.us-east-1.amazonaws.com/fiap-fase2/targeting-service
+    newTag: 1.0.2

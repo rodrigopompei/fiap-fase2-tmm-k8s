@@ -169,3 +169,12 @@ module "addons" {
   enable_keda                         = var.enable_keda
   enable_secrets_store_csi_driver     = var.enable_secrets_store_csi_driver
 }
+
+# ---------------------------------------------------------------------------
+# ArgoCD: GitOps contínuo
+# ---------------------------------------------------------------------------
+module "argocd" {
+  source = "./modules/argocd"
+
+  enable_argocd = var.enable_argocd
+}
